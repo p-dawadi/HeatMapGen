@@ -1,249 +1,271 @@
-"""Gene Heatmap Studio: upload, select columns, sort, choose Top N, and download PNG."""
+"""Gene Heatmap Studio — compact publication-style single-column heatmaps."""
 import io
 import hashlib
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize, TwoSlopeNorm, LinearSegmentedColormap
 import streamlit as st
 
-st.set_page_config(page_title="Gene Heatmap Studio", page_icon="🧬", layout="wide")
+st.set_page_config(page_title='Gene Heatmap Studio', page_icon='🧬', layout='wide')
 
 PALETTES = {
-    "Blues · recommended for magnitude": ("Blues", "sequential"),
-    "Cividis · color-vision accessible": ("cividis", "sequential"),
-    "Viridis · color-vision accessible": ("viridis", "sequential"),
-    "YlGnBu · blue/green": ("YlGnBu", "sequential"),
-    "Purples · single hue": ("Purples", "sequential"),
-    "RdBu · signed fold changes": ("RdBu_r", "diverging"),
-    "BrBG · signed values": ("BrBG", "diverging"),
+    'Blues · sequential': ('Blues', 'sequential'),
+    'Cividis · accessible': ('cividis', 'sequential'),
+    'Viridis · accessible': ('viridis', 'sequential'),
+    'YlGnBu · sequential': ('YlGnBu', 'sequential'),
+    'Purples · sequential': ('Purples', 'sequential'),
+    'RdBu · signed values': ('RdBu_r', 'diverging'),
+    'BrBG · signed values': ('BrBG', 'diverging'),
 }
-EXAMPLE = pd.DataFrame({"Gene": ["HAC1", "HDA6", "HAT1", "GCN5", "HDA19"],
-                        "Value": [1.80, -1.20, 0.65, 2.10, -0.85]})
+EXAMPLE = pd.DataFrame({
+    'Gene': ['HAC1', 'HDA6', 'HAT1', 'GCN5', 'HDA19'],
+    'Value': [1.80, -1.20, 0.65, 2.10, -0.85],
+})
 
-st.markdown("""<style>
-.block-container {max-width: 1500px; padding-top: 1.5rem;}
-[data-testid="stSidebar"] {background-color: #f7f9fc;}
-</style>""", unsafe_allow_html=True)
-st.title("Gene Heatmap Studio")
-st.caption("Upload a CSV, select two columns, sort and filter genes, customize your figure, then export a PNG.")
+st.markdown('''<style>
+.block-container {max-width: 1400px; padding-top: 1.3rem;}
+[data-testid="stSidebar"] {background: #f7f9fc;}
+</style>''', unsafe_allow_html=True)
+st.title('Gene Heatmap Studio')
+st.caption('Create compact, publication-ready single-column heatmaps from your CSV.')
 
 with st.sidebar:
-    st.subheader("1 · Upload data")
-    uploaded = st.file_uploader("Choose a CSV file", type="csv")
-    with st.expander("Example CSV"):
-        st.download_button("Download example CSV", EXAMPLE.to_csv(index=False).encode(),
-                           file_name="example_genes.csv", mime="text/csv", use_container_width=True)
+    st.subheader('1 · Upload CSV')
+    uploaded = st.file_uploader('Choose CSV', type=['csv'])
+    with st.expander('Example CSV'):
+        st.download_button('Download example CSV', EXAMPLE.to_csv(index=False).encode('utf-8'),
+                           'example_genes.csv', 'text/csv', use_container_width=True)
 
 if uploaded is None:
-    st.info("Upload a CSV using the sidebar to begin. No columns are selected automatically.")
-    st.dataframe(EXAMPLE, hide_index=True)
+    st.info('Upload a CSV to begin. Column selectors and plotting options appear after upload.')
     st.stop()
 
 source_hash = hashlib.sha256(uploaded.getvalue()).hexdigest()
-if st.session_state.get("source_hash") != source_hash:
-    st.session_state["source_hash"] = source_hash
-    st.session_state["generated_config"] = None
-    for key in ("gene_column", "value_column"):
+if st.session_state.get('source_hash') != source_hash:
+    st.session_state['source_hash'] = source_hash
+    st.session_state['generated_config'] = None
+    for key in ('gene_column', 'value_column'):
         st.session_state.pop(key, None)
 try:
     df = pd.read_csv(io.BytesIO(uploaded.getvalue()), low_memory=False)
 except Exception as exc:
-    st.error(f"Could not read the CSV: {exc}")
+    st.error(f'Cannot read CSV: {exc}')
     st.stop()
-if len(df.columns) < 2:
-    st.error("CSV must contain at least two columns.")
+if df.shape[1] < 2:
+    st.error('CSV needs at least two columns.')
     st.stop()
 
 with st.sidebar:
-    st.success(f"Uploaded {uploaded.name} ({len(df):,} rows)")
-    st.subheader("2 · Select columns")
-    gene_col = st.selectbox("Gene / label column (text)", df.columns.tolist(), index=None,
-                            placeholder="Select a column", key="gene_column")
-    possible_numeric = [col for col in df.columns if col != gene_col and
-                        pd.to_numeric(df[col], errors="coerce").notna().any()]
-    value_col = st.selectbox("Value column (numeric)", possible_numeric, index=None,
-                             placeholder="Select a column", key="value_column",
-                             disabled=(gene_col is None))
+    st.success(f'{uploaded.name} · {len(df):,} rows')
+    st.subheader('2 · Select columns')
+    gene_col = st.selectbox('Gene / label column', df.columns.tolist(), index=None,
+                            placeholder='Select text column', key='gene_column')
+    possible_numeric = [c for c in df.columns if c != gene_col and
+                        pd.to_numeric(df[c], errors='coerce').notna().any()]
+    value_col = st.selectbox('Numeric value column', possible_numeric, index=None,
+                             placeholder='Select numeric column', key='value_column',
+                             disabled=gene_col is None)
+
 if gene_col is None or value_col is None:
-    st.info("Select a gene-name column and a numeric-value column in the sidebar.")
-    with st.expander("Inspect uploaded CSV"):
-        st.dataframe(df.head(20), hide_index=True, use_container_width=True)
+    st.info('Select one gene-label column and one numeric-value column in the sidebar.')
+    with st.expander('Inspect uploaded CSV'):
+        st.dataframe(df.head(20), hide_index=True)
     st.stop()
 
-# Calculate valid, unique rows up front, so Top N can be limited to the available count.
-preview_data = pd.DataFrame({"Gene": df[gene_col].astype("string").str.strip(),
-                             "Value": pd.to_numeric(df[value_col], errors="coerce")})
-valid = (preview_data["Gene"].notna() & preview_data["Gene"].ne("") &
-         np.isfinite(preview_data["Value"].to_numpy(dtype=float, na_value=np.nan)))
-preview_data = preview_data.loc[valid].copy()
-if preview_data.empty:
-    st.error("No valid gene / numeric value pairs. Try different columns.")
+base = pd.DataFrame({'Gene': df[gene_col].astype('string').str.strip(),
+                     'Value': pd.to_numeric(df[value_col], errors='coerce')})
+mask = (base['Gene'].notna() & base['Gene'].ne('') &
+        np.isfinite(base['Value'].to_numpy(dtype=float, na_value=np.nan)))
+base = base.loc[mask].copy()
+if base.empty:
+    st.error('No rows contain both a gene label and numeric value.')
     st.stop()
-unique_count = int(preview_data["Gene"].nunique())
 
 with st.sidebar:
-    st.subheader("3 · Arrange genes")
-    with st.form("heatmap_form"):
-        sort_mode = st.selectbox("Sort genes before plotting", [
-            "Input order", "A to Z", "Z to A", "Value: low to high", "Value: high to low"
-        ], index=1)
-        duplicate_mode = st.selectbox("Repeated gene labels", [
-            "Keep first", "Average values", "Stop with error"
-        ])
-        # Zero means all genes. Any positive N selects the first N after sorting.
-        top_n = st.number_input(
-            "Number of genes to show (Top N)", min_value=0,
-            max_value=max(1, unique_count), value=0, step=1,
-            help="Enter 0 for all genes, or a positive number for Top N after sorting."
-        )
-        st.caption("0 = all genes. Otherwise select the first N after sorting (e.g., lowest 10 values).")
+    with st.form('plot_settings'):
+        st.subheader('3 · Sort and select')
+        sort_mode = st.selectbox('Sort genes before plotting',
+            ['Input order', 'A to Z', 'Z to A', 'Value: low to high', 'Value: high to low'],
+            index=1)
+        duplicate_mode = st.selectbox('Repeated gene labels',
+            ['Keep first', 'Average values', 'Stop with error'])
+        top_n = st.number_input('Top N genes (0 = all)', min_value=0,
+                                max_value=int(len(base)), value=0, step=1)
+        st.caption('Top N is applied after the selected sorting method.')
 
-        st.markdown("**Colors**")
-        palette_name = st.selectbox("Scientific color palette", list(PALETTES), index=0)
-        use_custom = st.checkbox("Use custom minimum and maximum colors", value=False)
+        st.subheader('4 · Colors')
+        palette_name = st.selectbox('Scientific palette', list(PALETTES), index=0)
+        use_custom = st.checkbox('Use custom minimum / median / maximum colors')
         if use_custom:
-            min_color = st.color_picker("Minimum color", "#F7FBFF")
-            max_color = st.color_picker("Maximum color", "#08519C")
+            min_color = st.color_picker('Minimum color (lowest value)', '#F7FBFF')
+            median_color = st.color_picker('Median color (middle value)', '#9ECAE1')
+            max_color = st.color_picker('Maximum color (highest value)', '#08519C')
+            st.caption('The median color is assigned to the statistical median of the displayed gene values.')
         else:
-            min_color, max_color = "#F7FBFF", "#08519C"
+            min_color, median_color, max_color = '#F7FBFF', '#9ECAE1', '#08519C'
 
-        st.markdown("**Labels**")
-        show_values = st.checkbox("Show numbers inside cells", value=True)
-        decimals = st.slider("Decimal places", 0, 6, 2, disabled=not show_values)
-        show_colorbar = st.checkbox("Show color legend", value=True)
-        gene_font_size = st.slider("Gene name font size (pt)", 4, 60, 14)
-        axis_font_size = st.slider("Column label font size (pt)", 4, 60, 14)
-        value_font_size = st.slider("Cell value font size (pt)", 4, 60, 13,
-                                    disabled=not show_values)
-        legend_font_size = st.slider("Legend font size (pt)", 4, 50, 12,
-                                     disabled=not show_colorbar)
+        st.subheader('5 · Layout')
+        box_width = st.slider('Colored heatmap width (inches)', 0.15, 10.0, 1.1, 0.05)
+        row_height = st.slider('Height per gene (inches)', 0.05, 1.5, 0.20, 0.01)
+        gap = st.slider('Gap between gene rows (points)', 0.0, 3.0, 0.0, 0.25)
+        show_column_label = st.checkbox('Show column label below heatmap', value=False)
+        show_values = st.checkbox('Show values inside cells', value=False)
+        decimals = st.slider('Decimal places', 0, 6, 2, disabled=not show_values)
+        gene_font = st.slider('Gene label font (pt)', 4, 60, 10)
+        col_font = st.slider('Column label font (pt)', 4, 60, 11, disabled=not show_column_label)
+        value_font = st.slider('Value font (pt)', 4, 60, 9, disabled=not show_values)
 
-        st.markdown("**Heatmap size**")
-        # Width controls the actual colored heatmap cell (not just the overall canvas).
-        cell_width = st.slider("Heatmap box width (inches)", 0.3, 15.0, 3.0, step=0.1)
-        cell_height = st.slider("Heatmap box height per gene (inches)", 0.15, 3.0, 0.50, step=0.05)
-        dpi = st.selectbox("PNG resolution", [150, 300, 600], index=1,
-                           format_func=lambda x: f"{x} DPI")
-        generate = st.form_submit_button("Generate heatmap", type="primary", use_container_width=True)
+        st.subheader('6 · Legend and export')
+        legend_position = st.selectbox('Legend position', ['Right', 'Bottom', 'Hide'], index=0)
+        legend_length = st.slider('Legend length (% of heatmap)', 10, 100, 45, 5,
+                                  disabled=legend_position == 'Hide')
+        legend_thickness = st.slider('Legend thickness (inches)', 0.05, 0.60, 0.12, 0.01,
+                                     disabled=legend_position == 'Hide')
+        legend_font = st.slider('Legend font (pt)', 4, 50, 9,
+                                disabled=legend_position == 'Hide')
+        legend_title = st.checkbox('Show legend title', value=False,
+                                   disabled=legend_position == 'Hide')
+        dpi = st.selectbox('PNG resolution', [300, 600], index=0,
+                           format_func=lambda x: f'{x} DPI')
+        generate = st.form_submit_button('Generate heatmap', type='primary', use_container_width=True)
 
-config = dict(source_hash=source_hash, gene_col=gene_col, value_col=value_col,
-              sort_mode=sort_mode, duplicate_mode=duplicate_mode,
-              top_n=int(top_n), palette_name=palette_name,
-              use_custom=use_custom, min_color=min_color, max_color=max_color,
-              show_values=show_values, decimals=decimals, show_colorbar=show_colorbar,
-              gene_font_size=gene_font_size, axis_font_size=axis_font_size,
-              value_font_size=value_font_size, legend_font_size=legend_font_size,
-              cell_width=cell_width, cell_height=cell_height, dpi=dpi)
+cfg_now = dict(source_hash=source_hash, gene_col=gene_col, value_col=value_col,
+               sort_mode=sort_mode, duplicate_mode=duplicate_mode, top_n=int(top_n),
+               palette_name=palette_name, use_custom=use_custom,
+               min_color=min_color, median_color=median_color, max_color=max_color, box_width=box_width,
+               row_height=row_height, gap=gap, show_column_label=show_column_label,
+               show_values=show_values, decimals=decimals, gene_font=gene_font,
+               col_font=col_font, value_font=value_font,
+               legend_position=legend_position, legend_length=legend_length,
+               legend_thickness=legend_thickness, legend_font=legend_font,
+               legend_title=legend_title, dpi=dpi)
 if generate:
-    st.session_state["generated_config"] = config.copy()
-
-cfg = st.session_state.get("generated_config")
-if cfg and (cfg["source_hash"], cfg["gene_col"], cfg["value_col"]) != (source_hash, gene_col, value_col):
-    st.session_state["generated_config"] = None
+    st.session_state['generated_config'] = cfg_now.copy()
+cfg = st.session_state.get('generated_config')
+if cfg is not None and (cfg['source_hash'], cfg['gene_col'], cfg['value_col']) != (source_hash, gene_col, value_col):
     cfg = None
+    st.session_state['generated_config'] = None
 if cfg is None:
-    st.info("Choose sorting, Top N, colors, fonts, and cell dimensions in the sidebar, then click **Generate heatmap**.")
-    with st.expander("Preview selected columns"):
-        st.dataframe(df[[gene_col, value_col]].head(20), hide_index=True, use_container_width=True)
+    st.info('Adjust sorting, size, and colors, then click **Generate heatmap**.')
     st.stop()
 
-clean = pd.DataFrame({"Gene": df[cfg["gene_col"]].astype("string").str.strip(),
-                      "Value": pd.to_numeric(df[cfg["value_col"]], errors="coerce")})
-mask = (clean["Gene"].notna() & clean["Gene"].ne("") &
-        np.isfinite(clean["Value"].to_numpy(dtype=float, na_value=np.nan)))
-removed = int((~mask).sum())
-clean = clean.loc[mask].copy()
-repeats = int(clean["Gene"].duplicated().sum())
+clean = base.copy()
+repeats = int(clean['Gene'].duplicated().sum())
 if repeats:
-    if cfg["duplicate_mode"] == "Stop with error":
-        st.error(f"Found {repeats} repeated gene labels. Change the duplicate setting and regenerate.")
+    if cfg['duplicate_mode'] == 'Stop with error':
+        st.error(f'{repeats} repeated labels found. Change duplicate handling and generate again.')
         st.stop()
-    elif cfg["duplicate_mode"] == "Keep first":
-        clean = clean.drop_duplicates("Gene", keep="first")
+    elif cfg['duplicate_mode'] == 'Keep first':
+        clean = clean.drop_duplicates('Gene', keep='first')
     else:
-        clean = clean.groupby("Gene", sort=False, as_index=False)["Value"].mean()
+        clean = clean.groupby('Gene', sort=False, as_index=False)['Value'].mean()
 
-if cfg["sort_mode"] == "A to Z":
-    clean = clean.sort_values("Gene", key=lambda s: s.str.casefold(), kind="stable")
-elif cfg["sort_mode"] == "Z to A":
-    clean = clean.sort_values("Gene", key=lambda s: s.str.casefold(), ascending=False, kind="stable")
-elif cfg["sort_mode"] == "Value: low to high":
-    clean = clean.sort_values("Value", kind="stable")
-elif cfg["sort_mode"] == "Value: high to low":
-    clean = clean.sort_values("Value", ascending=False, kind="stable")
-
-full_count = len(clean)
-if cfg["top_n"] > 0:
-    clean = clean.head(cfg["top_n"])  # Top N AFTER sorting for every mode
+if cfg['sort_mode'] == 'A to Z':
+    clean = clean.sort_values('Gene', key=lambda s: s.str.casefold(), kind='stable')
+elif cfg['sort_mode'] == 'Z to A':
+    clean = clean.sort_values('Gene', key=lambda s: s.str.casefold(), ascending=False, kind='stable')
+elif cfg['sort_mode'] == 'Value: low to high':
+    clean = clean.sort_values('Value', kind='stable')
+elif cfg['sort_mode'] == 'Value: high to low':
+    clean = clean.sort_values('Value', ascending=False, kind='stable')
+all_count = len(clean)
+if cfg['top_n']:
+    clean = clean.head(cfg['top_n'])
 clean = clean.reset_index(drop=True)
-values = clean["Value"].to_numpy(dtype=float)
-labels = clean["Gene"].astype(str).tolist()
-lo, hi = float(values.min()), float(values.max())
-name, mode = PALETTES[cfg["palette_name"]]
-cmap = (LinearSegmentedColormap.from_list("user_colors", [cfg["min_color"], cfg["max_color"]])
-        if cfg["use_custom"] else matplotlib.colormaps[name])
-if mode == "diverging" and not cfg["use_custom"]:
-    extent = max(abs(lo), abs(hi), 1e-8)
-    norm = TwoSlopeNorm(vmin=-extent, vcenter=0, vmax=extent)
+values = clean['Value'].to_numpy(float)
+labels = clean['Gene'].astype(str).tolist()
+low, high = float(values.min()), float(values.max())
+name, palette_type = PALETTES[cfg['palette_name']]
+# Map the chosen middle color to the actual median, not just an arbitrary center.
+# Avoid duplicate color stops when the median equals an extreme.
+if cfg['use_custom']:
+    median_value = float(np.median(values))
+    if high > low:
+        median_fraction = (median_value - low) / (high - low)
+        if median_fraction <= 0:
+            stops = [(0.0, cfg['median_color']), (1.0, cfg['max_color'])]
+        elif median_fraction >= 1:
+            stops = [(0.0, cfg['min_color']), (1.0, cfg['median_color'])]
+        else:
+            stops = [(0.0, cfg['min_color']),
+                     (median_fraction, cfg['median_color']),
+                     (1.0, cfg['max_color'])]
+    else:
+        stops = [(0.0, cfg['median_color']), (1.0, cfg['median_color'])]
+    cmap = LinearSegmentedColormap.from_list('custom', stops, N=256)
 else:
-    norm = Normalize(vmin=lo, vmax=hi if hi > lo else lo + 1)
+    cmap = matplotlib.colormaps[name]
+if palette_type == 'diverging' and not cfg['use_custom']:
+    span = max(abs(low), abs(high), 1e-9)
+    norm = TwoSlopeNorm(vmin=-span, vcenter=0, vmax=span)
+else:
+    norm = Normalize(vmin=low, vmax=high if high > low else low + 1)
 
-# Explicit axes coordinates make the COLOR BOX width match the user's setting.
-# Reserve sufficient space for long gene names and large fonts.
-label_chars = max(len(x) for x in labels)
-left_margin = max(1.4, min(7.5, label_chars * cfg["gene_font_size"] / 80 + 0.75))
-right_margin = 1.6 if cfg["show_colorbar"] else 0.5
-bottom_margin = max(0.65, cfg["axis_font_size"] / 50 + 0.45)
-top_margin = 0.3
-box_w = cfg["cell_width"]
-box_h = max(0.01, len(labels) * cfg["cell_height"])
-fig_w = left_margin + box_w + right_margin
-fig_h = bottom_margin + box_h + top_margin
-fig = plt.figure(figsize=(fig_w, fig_h), facecolor="white")
-ax = fig.add_axes([left_margin / fig_w, bottom_margin / fig_h,
-                   box_w / fig_w, box_h / fig_h])
-im = ax.imshow(values[:, None], aspect="auto", cmap=cmap, norm=norm,
-               interpolation="nearest")
-ax.set_yticks(range(len(labels)), labels=labels, fontsize=cfg["gene_font_size"])
-ax.set_xticks([0], labels=[cfg["value_col"]], fontsize=cfg["axis_font_size"])
-ax.tick_params(axis="both", which="major", length=0, pad=9)
+# Exact physical dimensions: colored heatmap width and each gene-row height.
+# Colorbar is separately sized and does not stretch to the full heatmap height.
+n = len(labels)
+heat_w = cfg['box_width']
+heat_h = max(0.05, n * cfg['row_height'])
+max_label_len = max(len(s) for s in labels)
+left = max(0.8, min(7.0, max_label_len * cfg['gene_font'] * 0.009 + 0.40))
+top = 0.18
+bottom = 0.50 if cfg['show_column_label'] else 0.16
+right = 0.20 if cfg['legend_position'] != 'Right' else max(0.95, cfg['legend_font'] * 0.06 + 0.70)
+if cfg['legend_position'] == 'Bottom':
+    bottom += max(0.48, cfg['legend_font'] * 0.038 + cfg['legend_thickness'] + 0.24)
+fw, fh = left + heat_w + right, top + heat_h + bottom
+fig = plt.figure(figsize=(fw, fh), facecolor='white')
+ax = fig.add_axes([left/fw, bottom/fh, heat_w/fw, heat_h/fh])
+im = ax.imshow(values.reshape(-1, 1), aspect='auto', interpolation='nearest', cmap=cmap, norm=norm)
+ax.set_yticks(np.arange(n), labels=labels, fontsize=cfg['gene_font'])
+ax.set_xticks([0] if cfg['show_column_label'] else [],
+              [cfg['value_col']] if cfg['show_column_label'] else [], fontsize=cfg['col_font'])
+ax.tick_params(axis='both', which='both', length=0, pad=3)
 for spine in ax.spines.values():
     spine.set_visible(False)
-ax.set_xticks([-0.5, 0.5], minor=True)
-ax.set_yticks(np.arange(-0.5, len(labels), 1), minor=True)
-ax.grid(which="minor", color="white", linewidth=1.5)
-ax.tick_params(which="minor", bottom=False, left=False)
-if cfg["show_values"]:
-    for i, value in enumerate(values):
-        r, g, b, _ = cmap(norm(value))
-        luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        ax.text(0, i, f"{value:.{cfg['decimals']}f}", ha="center", va="center",
-                fontsize=cfg["value_font_size"],
-                color="#17212b" if luminance > 0.53 else "white")
-if cfg["show_colorbar"]:
-    cax = fig.add_axes([(left_margin + box_w + 0.25) / fig_w,
-                        (bottom_margin + 0.05 * box_h) / fig_h,
-                        0.22 / fig_w, 0.90 * box_h / fig_h])
-    cb = fig.colorbar(im, cax=cax)
-    cb.ax.tick_params(labelsize=cfg["legend_font_size"])
-    cb.set_label(cfg["value_col"], fontsize=cfg["legend_font_size"])
+# Separators optional; default 0 creates fully contiguous strips.
+if cfg['gap'] > 0:
+    for y in np.arange(0.5, n, 1):
+        ax.axhline(y, color='white', linewidth=cfg['gap'])
+if cfg['show_values']:
+    for i, v in enumerate(values):
+        r, g, b, _ = cmap(norm(v))
+        lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        ax.text(0, i, f"{v:.{cfg['decimals']}f}", ha='center', va='center',
+                fontsize=cfg['value_font'], color='#111827' if lum > .52 else 'white')
+
+if cfg['legend_position'] != 'Hide':
+    length = cfg['legend_length'] / 100
+    thick = cfg['legend_thickness']
+    if cfg['legend_position'] == 'Right':
+        legend_h = heat_h * length
+        x0 = left + heat_w + 0.19
+        y0 = bottom + (heat_h - legend_h) / 2
+        cax = fig.add_axes([x0/fw, y0/fh, thick/fw, legend_h/fh])
+        cb = fig.colorbar(im, cax=cax, orientation='vertical')
+    else:
+        legend_w = heat_w * length
+        x0 = left + (heat_w - legend_w) / 2
+        y0 = bottom - max(0.36, cfg['legend_font'] * 0.032 + thick)
+        cax = fig.add_axes([x0/fw, y0/fh, legend_w/fw, thick/fh])
+        cb = fig.colorbar(im, cax=cax, orientation='horizontal')
+    cb.ax.tick_params(labelsize=cfg['legend_font'], length=2, pad=2)
     cb.outline.set_visible(False)
+    if cfg['legend_title']:
+        cb.set_label(cfg['value_col'], fontsize=cfg['legend_font'], labelpad=3)
 
-st.subheader("Heatmap preview")
-st.caption(f"{cfg['sort_mode']} · Showing {len(clean):,} of {full_count:,} valid genes")
-# Do not automatically stretch the preview; PNG retains the exact user-selected box dimensions.
+st.subheader('Heatmap preview')
+st.caption(f"{cfg['sort_mode']} · Showing {n} of {all_count} genes · {cfg['row_height']:.2f} in per row · No row gaps by default")
 st.pyplot(fig, use_container_width=False)
-with st.expander("Selected genes and values"):
+with st.expander('View selected gene values'):
     st.dataframe(clean, hide_index=True, use_container_width=True)
-if removed:
-    st.warning(f"Excluded {removed} row(s) with missing/invalid labels or values.")
 
-png_buffer = io.BytesIO()
-fig.savefig(png_buffer, format="png", dpi=cfg["dpi"], facecolor="white")
+png = io.BytesIO()
+fig.savefig(png, dpi=cfg['dpi'], format='png', facecolor='white')
 plt.close(fig)
-st.download_button("Download heatmap (PNG)", data=png_buffer.getvalue(),
-                   file_name="gene_heatmap.png", mime="image/png", type="primary")
-st.caption("Change the sidebar settings and click Generate heatmap again to refresh the plot.")
+st.download_button('Download high-resolution PNG', data=png.getvalue(),
+                   file_name='gene_heatmap.png', mime='image/png', type='primary')
+st.caption('Change sidebar settings and click Generate heatmap again to refresh the figure.')
