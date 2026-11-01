@@ -93,13 +93,13 @@ with st.sidebar:
         duplicate_mode = st.selectbox("Repeated gene labels", [
             "Keep first", "Average values", "Stop with error"
         ])
-        # Applies to ALL five sorting modes. Sorting happens BEFORE the head(N) selection.
-        select_all = st.checkbox("Include all genes", value=True)
-        top_n = st.number_input("Number of genes to show (Top N)", min_value=1,
-                                max_value=max(1, unique_count),
-                                value=min(10, unique_count), step=1,
-                                disabled=select_all)
-        st.caption("Sort first, then keep the first N genes in that order. For low-to-high, this means the lowest N values.")
+        # Zero means all genes. Any positive N selects the first N after sorting.
+        top_n = st.number_input(
+            "Number of genes to show (Top N)", min_value=0,
+            max_value=max(1, unique_count), value=0, step=1,
+            help="Enter 0 for all genes, or a positive number for Top N after sorting."
+        )
+        st.caption("0 = all genes. Otherwise select the first N after sorting (e.g., lowest 10 values).")
 
         st.markdown("**Colors**")
         palette_name = st.selectbox("Scientific color palette", list(PALETTES), index=0)
@@ -131,7 +131,7 @@ with st.sidebar:
 
 config = dict(source_hash=source_hash, gene_col=gene_col, value_col=value_col,
               sort_mode=sort_mode, duplicate_mode=duplicate_mode,
-              select_all=select_all, top_n=int(top_n), palette_name=palette_name,
+              top_n=int(top_n), palette_name=palette_name,
               use_custom=use_custom, min_color=min_color, max_color=max_color,
               show_values=show_values, decimals=decimals, show_colorbar=show_colorbar,
               gene_font_size=gene_font_size, axis_font_size=axis_font_size,
@@ -176,7 +176,7 @@ elif cfg["sort_mode"] == "Value: high to low":
     clean = clean.sort_values("Value", ascending=False, kind="stable")
 
 full_count = len(clean)
-if not cfg["select_all"]:
+if cfg["top_n"] > 0:
     clean = clean.head(cfg["top_n"])  # Top N AFTER sorting for every mode
 clean = clean.reset_index(drop=True)
 values = clean["Value"].to_numpy(dtype=float)
