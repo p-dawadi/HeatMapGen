@@ -115,8 +115,9 @@ with st.sidebar:
         show_values = st.checkbox('Show values inside cells', value=False)
         decimals = st.slider('Decimal places', 0, 6, 2, disabled=not show_values)
         gene_font = st.slider('Gene label font (pt)', 4, 60, 10)
-        col_font = st.slider('Column label font (pt)', 4, 60, 11, disabled=not show_column_label)
-        value_font = st.slider('Value font (pt)', 4, 60, 9, disabled=not show_values)
+        # Column and in-cell value labels use consistent automatic sizes.
+        col_font = gene_font
+        value_font = min(gene_font, 12)
 
         st.subheader('6 · Legend and export')
         legend_position = st.selectbox('Legend position', ['Right', 'Bottom', 'Hide'], index=0)
