@@ -124,6 +124,10 @@ with st.sidebar:
                                   disabled=legend_position == 'Hide')
         legend_thickness = st.slider('Legend thickness (inches)', 0.05, 0.60, 0.12, 0.01,
                                      disabled=legend_position == 'Hide')
+        legend_gap = st.slider('Distance from heatmap to legend (inches)',
+                               0.02, 2.00, 0.12, 0.01,
+                               disabled=legend_position == 'Hide',
+                               help='Controls the gap between the colored heatmap and its legend, whether below or on the right.')
         legend_font = st.slider('Legend font (pt)', 4, 50, 9,
                                 disabled=legend_position == 'Hide')
         legend_title = st.checkbox('Show legend title', value=False,
@@ -140,7 +144,7 @@ cfg_now = dict(source_hash=source_hash, gene_col=gene_col, value_col=value_col,
                show_values=show_values, decimals=decimals, gene_font=gene_font,
                col_font=col_font, value_font=value_font,
                legend_position=legend_position, legend_length=legend_length,
-               legend_thickness=legend_thickness, legend_font=legend_font,
+               legend_thickness=legend_thickness, legend_gap=legend_gap, legend_font=legend_font,
                legend_title=legend_title, dpi=dpi)
 if generate:
     st.session_state['generated_config'] = cfg_now.copy()
@@ -213,9 +217,15 @@ max_label_len = max(len(s) for s in labels)
 left = max(0.8, min(7.0, max_label_len * cfg['gene_font'] * 0.009 + 0.40))
 top = 0.18
 bottom = 0.50 if cfg['show_column_label'] else 0.16
-right = 0.20 if cfg['legend_position'] != 'Right' else max(0.95, cfg['legend_font'] * 0.06 + 0.70)
+right = 0.20 if cfg['legend_position'] != 'Right' else (
+    cfg['legend_gap'] + cfg['legend_thickness'] + max(0.50, cfg['legend_font'] * 0.075 + 0.25)
+)
 if cfg['legend_position'] == 'Bottom':
-    bottom += max(0.48, cfg['legend_font'] * 0.038 + cfg['legend_thickness'] + 0.24)
+    # Include physical bar gap + thickness + tick-label/title clearance below it.
+    # The legend gap is measured from the colored heatmap's lower edge.
+    bottom += cfg['legend_gap'] + cfg['legend_thickness'] + max(
+        0.30, cfg['legend_font'] * 0.025 + (0.18 if cfg['legend_title'] else 0.08)
+    )
 fw, fh = left + heat_w + right, top + heat_h + bottom
 fig = plt.figure(figsize=(fw, fh), facecolor='white')
 ax = fig.add_axes([left/fw, bottom/fh, heat_w/fw, heat_h/fh])
@@ -242,14 +252,14 @@ if cfg['legend_position'] != 'Hide':
     thick = cfg['legend_thickness']
     if cfg['legend_position'] == 'Right':
         legend_h = heat_h * length
-        x0 = left + heat_w + 0.19
+        x0 = left + heat_w + cfg['legend_gap']
         y0 = bottom + (heat_h - legend_h) / 2
         cax = fig.add_axes([x0/fw, y0/fh, thick/fw, legend_h/fh])
         cb = fig.colorbar(im, cax=cax, orientation='vertical')
     else:
         legend_w = heat_w * length
         x0 = left + (heat_w - legend_w) / 2
-        y0 = bottom - max(0.36, cfg['legend_font'] * 0.032 + thick)
+        y0 = bottom - cfg['legend_gap'] - thick
         cax = fig.add_axes([x0/fw, y0/fh, legend_w/fw, thick/fh])
         cb = fig.colorbar(im, cax=cax, orientation='horizontal')
     cb.ax.tick_params(labelsize=cfg['legend_font'], length=2, pad=2)
